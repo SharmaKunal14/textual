@@ -1,0 +1,1 @@
+Bounded Smart CI experiment. Python 3.14, Ubuntu 24.04, native Poetry lockfile, syntax extras and coverage. Only this two-job PR workflow is enabled on experiment branches. Unknown dependencies require full native tests. Baseline source: 5e5b7ef58b8c5572c13a3ff9027d756623661495.

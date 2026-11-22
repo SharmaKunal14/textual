@@ -1,0 +1,72 @@
+name: Textual Smart CI experiment
+on:
+  pull_request:
+    branches: [codex/smartci-base]
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+concurrency:
+  group: textual-pilot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  benchmark:
+    name: ${{ matrix.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        mode: [native, smart]
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: app
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - name: Install native Poetry toolchain
+        run: pipx install poetry==1.7.1
+      - name: Install native locked dependencies and syntax extras
+        working-directory: app
+        run: poetry install --no-interaction --extras syntax
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        if: matrix.mode == 'smart'
+        with:
+          repository: SharmaKunal14/smart-ci
+          ref: fa7cb1994b98f0c2ddd0e83dd603eb9d127f6f41
+          path: tool
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        if: matrix.mode == 'smart'
+        with:
+          version: '0.11.6'
+          enable-cache: false
+      - name: Install locked planner and observer without changing native dependencies
+        if: matrix.mode == 'smart'
+        run: |
+          uv sync --project tool --frozen --no-dev --python 3.14
+          cd app
+          poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
+      - name: Run measured native or Smart CI path
+        working-directory: app
+        env:
+          BENCHMARK_MODE: ${{ matrix.mode }}
+        run: |
+          poetry run python .smartci/benchmark.py --mode "$BENCHMARK_MODE" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/results" \
+            --planner-python "$GITHUB_WORKSPACE/tool/.venv/bin/python"
+      - name: Preserve independent test results and audit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: textual-${{ matrix.mode }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/results
+          retention-days: 7
+          if-no-files-found: error
