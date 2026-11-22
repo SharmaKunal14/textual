@@ -1,7 +1,7 @@
-name: Textual known dependency breadth
+name: Textual process dependency safety audit
 on:
   pull_request:
-    branches: [codex/graph-breadth-base]
+    branches: [codex/process-gap-base]
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: SharmaKunal14/smart-ci
-          ref: 9c775322984a77a4c1f7fd3c424aa6e5cc9d01c9
+          ref: 13b04ab3eaff4244413f1e81fa5c3e0e32eefbe7
           path: tool
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
@@ -74,6 +74,11 @@ jobs:
           if changed != ["src/textual/_xterm_parser.py"]:
               raise ValueError("pilot PR must contain only the parser regression")
           base, head = (read(f"{label}-compatibility.json") for label in ("base", "head"))
+          for snapshot in (base, head):
+              if not any(g["code"] == "DYNAMIC_PROCESS" and g["path"] == "tests/test_pipe.py" for g in snapshot["gaps"]):
+                  raise ValueError("child-process dependency must have an explicit gap")
+              if snapshot["complete"]:
+                  raise ValueError("unsupported process execution cannot be complete")
           for field in ("native_cases_digest", "files", "cases", "environment_identity", "plugins", "edges_digest", "imports_digest"):
               if base[field] != head[field]:
                   raise ValueError(f"unexpected {field} difference")
@@ -88,7 +93,7 @@ jobs:
               raise ValueError("diagnostic must not authorize execution or claim savings")
           if read("selection.json")["execution"] != "full" or read("targets.json") is not None:
               raise ValueError("remaining unknown behavior must retain full fallback")
-          summary = {"comparison": report["comparison"], "test_files_reached": report["aggregate"]["test_files_reached"], "test_files_total": report["aggregate"]["test_files_total"], "test_files_not_reached": report["aggregate"]["test_files_not_reached"], "remaining_gaps": len(head["gaps"]), "omission_authorized": False, "test_execution_performed": False, "ci_savings_demonstrated": False, "witnesses": report["aggregate"]["witnesses"][:3]}
+          summary = {"comparison": report["comparison"], "test_files_reached": report["aggregate"]["test_files_reached"], "test_files_total": report["aggregate"]["test_files_total"], "test_files_not_reached": report["aggregate"]["test_files_not_reached"], "remaining_gaps": len(head["gaps"]), "process_gaps": [g for g in head["gaps"] if g["code"] == "DYNAMIC_PROCESS"], "omission_authorized": False, "test_execution_performed": False, "ci_savings_demonstrated": False, "witnesses": report["aggregate"]["witnesses"][:3]}
           (root / "verification.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
           print(json.dumps(summary, indent=2))
           PY
