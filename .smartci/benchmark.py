@@ -105,7 +105,9 @@ def selected_targets(path: Path) -> list[str] | None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--mode", choices=["native", "smart", "plan", "observe"], required=True
+        "--mode",
+        choices=["native", "smart", "plan", "observe", "observe-scoped"],
+        required=True,
     )
     parser.add_argument("--base", type=revision, required=True)
     parser.add_argument("--head", type=revision, required=True)
@@ -171,7 +173,8 @@ def main() -> int:
         "--cov-report=term-missing",
         f"--junitxml={output / 'junit.xml'}",
     ]
-    if args.mode == "observe":
+    observing = args.mode in {"observe", "observe-scoped"}
+    if observing:
         command.extend(
             [
                 "-p",
@@ -180,9 +183,17 @@ def main() -> int:
                 str(output / "observation.json"),
             ]
         )
+        if args.mode == "observe-scoped":
+            command.extend(
+                [
+                    "--smartci-observation-engine",
+                    "monitoring",
+                    "--smartci-observation-contexts",
+                ]
+            )
     try:
         code = subprocess.run(
-            command, check=False, timeout=900 if args.mode == "observe" else 720
+            command, check=False, timeout=900 if observing else 720
         ).returncode
     except subprocess.TimeoutExpired:
         code = 124
