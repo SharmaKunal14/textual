@@ -35,7 +35,10 @@ jobs:
         run: pipx install poetry==1.7.1
       - name: Install native locked dependencies and syntax extras
         working-directory: app
-        run: poetry install --no-interaction --extras syntax
+        run: |
+          poetry env use "$pythonLocation/bin/python"
+          poetry install --no-interaction --extras syntax
+          poetry run python -c 'import sys; assert sys.version_info[:2] == (3, 14); print(sys.version)'
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         if: matrix.mode == 'smart'
         with:
