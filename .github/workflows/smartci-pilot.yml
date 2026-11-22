@@ -1,12 +1,12 @@
-name: Textual Smart CI experiment
+name: Textual runtime observation experiment
 on:
   pull_request:
-    branches: [codex/discovery-base]
+    branches: [codex/runtime-base]
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
 concurrency:
-  group: textual-pilot-${{ github.event.pull_request.number }}
+  group: textual-observation-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   benchmark:
@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        mode: [native, smart]
+        mode: [native, observe]
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -40,31 +40,23 @@ jobs:
           poetry install --no-interaction --extras syntax
           poetry run python -c 'import sys; assert sys.version_info[:2] == (3, 14); print(sys.version)'
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        if: matrix.mode == 'smart'
+        if: matrix.mode == 'observe'
         with:
           repository: SharmaKunal14/smart-ci
-          ref: d8840222d9bf8d5ef023bf3be30d66c4729c6353
+          ref: e878d8b1d9c3e50a19a51476c6115e6239e91c15
           path: tool
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
-        if: matrix.mode == 'smart'
-        with:
-          version: '0.11.6'
-          enable-cache: false
-      - name: Install locked planner and observer without changing native dependencies
-        if: matrix.mode == 'smart'
-        run: |
-          uv sync --project tool --frozen --no-dev --python 3.14
-          cd app
-          poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
-      - name: Run measured native or Smart CI path
+      - name: Install observer without changing native dependencies
+        if: matrix.mode == 'observe'
+        working-directory: app
+        run: poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
+      - name: Run full native or instrumented profile
         working-directory: app
         env:
           BENCHMARK_MODE: ${{ matrix.mode }}
         run: |
           poetry run python .smartci/benchmark.py --mode "$BENCHMARK_MODE" \
-            --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/results" \
-            --planner-python "$GITHUB_WORKSPACE/tool/.venv/bin/python"
+            --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/results"
       - name: Preserve independent test results and audit
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
