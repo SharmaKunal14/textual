@@ -1,23 +1,17 @@
-name: Textual runtime observation experiment
+name: Textual known dependency breadth
 on:
   pull_request:
-    branches: [codex/runtime-base]
+    branches: [codex/graph-breadth-base]
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
 concurrency:
-  group: textual-observation-${{ github.event.pull_request.number }}
+  group: textual-breadth-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
-  benchmark:
-    name: ${{ matrix.mode }}
+  discovery:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        mode: [native, observe]
+    timeout-minutes: 12
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -40,28 +34,69 @@ jobs:
           poetry install --no-interaction --extras syntax
           poetry run python -c 'import sys; assert sys.version_info[:2] == (3, 14); print(sys.version)'
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        if: matrix.mode == 'observe'
         with:
           repository: SharmaKunal14/smart-ci
-          ref: e878d8b1d9c3e50a19a51476c6115e6239e91c15
+          ref: 9c775322984a77a4c1f7fd3c424aa6e5cc9d01c9
           path: tool
           persist-credentials: false
-      - name: Install observer without changing native dependencies
-        if: matrix.mode == 'observe'
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: '0.11.6'
+          enable-cache: false
+      - name: Install collector and observer without changing native dependencies
+        run: |
+          uv sync --project tool --frozen --no-dev --python "$pythonLocation/bin/python"
+          cd app
+          poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
+      - name: Collect native inventory and inspect recorded graph breadth
         working-directory: app
-        run: poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
-      - name: Run full native or instrumented profile
+        run: |
+          target_python="$(poetry run python -c 'import sys; print(sys.executable)')"
+          "$GITHUB_WORKSPACE/tool/.venv/bin/python" "$GITHUB_WORKSPACE/tool/examples/textual/benchmark.py" \
+            --mode plan --base "$BASE_SHA" --head "$HEAD_SHA" --target-python "$target_python" \
+            --output "$RUNNER_TEMP/audit" --diagnose-reachability
+      - name: Verify source-only comparison and retained full fallback
         working-directory: app
         env:
-          BENCHMARK_MODE: ${{ matrix.mode }}
+          AUDIT_ROOT: ${{ runner.temp }}/audit
         run: |
-          poetry run python .smartci/benchmark.py --mode "$BENCHMARK_MODE" \
-            --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/results"
-      - name: Preserve independent test results and audit
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["AUDIT_ROOT"])
+          def read(filename):
+              return json.loads((root / filename).read_text())
+
+          changed = subprocess.run(["git", "diff", "--name-only", os.environ["BASE_SHA"], os.environ["HEAD_SHA"]], check=True, capture_output=True, text=True, timeout=15).stdout.splitlines()
+          if changed != ["src/textual/_xterm_parser.py"]:
+              raise ValueError("pilot PR must contain only the parser regression")
+          base, head = (read(f"{label}-compatibility.json") for label in ("base", "head"))
+          for field in ("native_cases_digest", "files", "cases", "environment_identity", "plugins", "edges_digest", "imports_digest"):
+              if base[field] != head[field]:
+                  raise ValueError(f"unexpected {field} difference")
+          report = read("known-reachability.json")
+          if report["comparison"] != {"base": os.environ["BASE_SHA"], "head": os.environ["HEAD_SHA"]}:
+              raise ValueError("wrong comparison")
+          if report["snapshots"] != {"base": base["snapshot_digest"], "head": head["snapshot_digest"]}:
+              raise ValueError("wrong snapshots")
+          if report["aggregate"]["changed_paths"] != changed or report["unmapped_changed_paths"]:
+              raise ValueError("source change missing from diagnostic")
+          if report["omission_authorized"] or report["test_execution_performed"] or report["ci_savings_demonstrated"] or report["execution_required"] != "full":
+              raise ValueError("diagnostic must not authorize execution or claim savings")
+          if read("selection.json")["execution"] != "full" or read("targets.json") is not None:
+              raise ValueError("remaining unknown behavior must retain full fallback")
+          summary = {"comparison": report["comparison"], "test_files_reached": report["aggregate"]["test_files_reached"], "test_files_total": report["aggregate"]["test_files_total"], "test_files_not_reached": report["aggregate"]["test_files_not_reached"], "remaining_gaps": len(head["gaps"]), "omission_authorized": False, "test_execution_performed": False, "ci_savings_demonstrated": False, "witnesses": report["aggregate"]["witnesses"][:3]}
+          (root / "verification.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(summary, indent=2))
+          PY
+      - name: Preserve dependency evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: textual-${{ matrix.mode }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/results
+          name: textual-graph-breadth-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/audit
           retention-days: 7
           if-no-files-found: error
