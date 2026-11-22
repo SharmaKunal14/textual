@@ -39,7 +39,7 @@ SPECIAL_SEQUENCES = {BRACKETED_PASTE_START, BRACKETED_PASTE_END, FOCUSIN, FOCUSO
 """Set of special sequences."""
 
 _re_extended_key: Final[re.Pattern[str]] = re.compile(
-    r"\x1b\[((?:[\d:]*;?){2,3})([u~ABCDEFHPQRS])"
+    r"\x1b\[((?:\d*;?){2,3})([u~ABCDEFHPQRS])"
 )
 _re_in_band_window_resize: Final[re.Pattern[str]] = re.compile(
     r"\x1b\[48;(\d+(?:\:.*?)?);(\d+(?:\:.*?)?);(\d+(?:\:.*?)?);(\d+(?:\:.*?)?)t"
