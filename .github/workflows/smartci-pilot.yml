@@ -1,4 +1,4 @@
-name: Textual runtime observation experiment
+name: Textual scoped runtime observation experiment
 on:
   pull_request:
     branches: [codex/runtime-base]
@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        mode: [native, observe]
+        mode: [native, observe-scoped]
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -40,14 +40,14 @@ jobs:
           poetry install --no-interaction --extras syntax
           poetry run python -c 'import sys; assert sys.version_info[:2] == (3, 14); print(sys.version)'
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        if: matrix.mode == 'observe'
+        if: matrix.mode == 'observe-scoped'
         with:
           repository: SharmaKunal14/smart-ci
-          ref: e878d8b1d9c3e50a19a51476c6115e6239e91c15
+          ref: 20989eeeb91134ab68873bf98745f3c639ee3a09
           path: tool
           persist-credentials: false
       - name: Install observer without changing native dependencies
-        if: matrix.mode == 'observe'
+        if: matrix.mode == 'observe-scoped'
         working-directory: app
         run: poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
       - name: Run full native or instrumented profile
