@@ -1,7 +1,7 @@
 name: Textual Smart CI experiment
 on:
   pull_request:
-    branches: [codex/smartci-base]
+    branches: [codex/discovery-base]
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
@@ -43,7 +43,7 @@ jobs:
         if: matrix.mode == 'smart'
         with:
           repository: SharmaKunal14/smart-ci
-          ref: fa7cb1994b98f0c2ddd0e83dd603eb9d127f6f41
+          ref: d8840222d9bf8d5ef023bf3be30d66c4729c6353
           path: tool
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
