@@ -53,13 +53,18 @@ jobs:
         run: |
           uv sync --project previous --frozen --no-dev --python "$pythonLocation/bin/python"
           uv sync --project revised --frozen --no-dev --python "$pythonLocation/bin/python"
+      - name: Install identical collection observer without changing native dependencies
+        run: |
+          cmp previous/src/smartci/adapters/pytest_plugin.py revised/src/smartci/adapters/pytest_plugin.py
+          cd app
+          poetry run python -m pip install --disable-pip-version-check --no-deps ../previous
       - name: Collect and plan with both collectors without executing tests
         working-directory: app
         run: |
           target_python="$(poetry run python -c 'import sys; print(sys.executable)')"
           for collector in previous revised; do
             echo "Collecting with $collector adapter"
-            "../$collector/.venv/bin/python" ../revised/examples/textual/benchmark.py \
+            "$GITHUB_WORKSPACE/$collector/.venv/bin/python" "$GITHUB_WORKSPACE/revised/examples/textual/benchmark.py" \
               --mode plan --base "$BASE_SHA" --head "$HEAD_SHA" \
               --target-python "$target_python" --output "$RUNNER_TEMP/audit/$collector"
           done
