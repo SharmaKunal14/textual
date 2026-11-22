@@ -1,4 +1,4 @@
-name: Textual runtime observation experiment
+name: Textual dependency discovery audit
 on:
   pull_request:
     branches: [codex/runtime-base]
@@ -6,18 +6,12 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: textual-observation-${{ github.event.pull_request.number }}
+  group: textual-discovery-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
-  benchmark:
-    name: ${{ matrix.mode }}
+  discovery:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        mode: [native, observe]
+    timeout-minutes: 12
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -40,28 +34,83 @@ jobs:
           poetry install --no-interaction --extras syntax
           poetry run python -c 'import sys; assert sys.version_info[:2] == (3, 14); print(sys.version)'
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        if: matrix.mode == 'observe'
         with:
           repository: SharmaKunal14/smart-ci
-          ref: e878d8b1d9c3e50a19a51476c6115e6239e91c15
-          path: tool
+          ref: 0260615ca6d6764a16be7d525d3663ff42a5b0b7
+          path: previous
           persist-credentials: false
-      - name: Install observer without changing native dependencies
-        if: matrix.mode == 'observe'
-        working-directory: app
-        run: poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
-      - name: Run full native or instrumented profile
-        working-directory: app
-        env:
-          BENCHMARK_MODE: ${{ matrix.mode }}
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: SharmaKunal14/smart-ci
+          ref: 9a2ec11d7911f237b575f814d84a00444e9f3825
+          path: revised
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: '0.11.6'
+          enable-cache: false
+      - name: Install isolated collectors
         run: |
-          poetry run python .smartci/benchmark.py --mode "$BENCHMARK_MODE" \
-            --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/results"
-      - name: Preserve independent test results and audit
+          uv sync --project previous --frozen --no-dev --python "$pythonLocation/bin/python"
+          uv sync --project revised --frozen --no-dev --python "$pythonLocation/bin/python"
+      - name: Install identical collection observer without changing native dependencies
+        run: |
+          cmp previous/src/smartci/adapters/pytest_plugin.py revised/src/smartci/adapters/pytest_plugin.py
+          cd app
+          poetry run python -m pip install --disable-pip-version-check --no-deps ../previous
+      - name: Collect and plan with both collectors without executing tests
+        working-directory: app
+        run: |
+          target_python="$(poetry run python -c 'import sys; print(sys.executable)')"
+          for collector in previous revised; do
+            echo "Collecting with $collector adapter"
+            "$GITHUB_WORKSPACE/$collector/.venv/bin/python" "$GITHUB_WORKSPACE/revised/examples/textual/benchmark.py" \
+              --mode plan --base "$BASE_SHA" --head "$HEAD_SHA" \
+              --target-python "$target_python" --output "$RUNNER_TEMP/audit/$collector"
+          done
+      - name: Verify exact diagnostic change and preserved full fallback
+        env:
+          AUDIT_ROOT: ${{ runner.temp }}/audit
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["AUDIT_ROOT"])
+          def read(version, filename):
+              return json.loads((root / version / filename).read_text())
+
+          reports = []
+          for label in ("base", "head"):
+              old = read("previous", f"{label}-compatibility.json")
+              new = read("revised", f"{label}-compatibility.json")
+              for field in ("commit", "files", "cases", "native_cases_digest", "source_digest", "environment_identity", "edges_digest", "imports_digest", "plugins"):
+                  if old[field] != new[field]:
+                      raise ValueError(f"{label}: unexpected {field} change")
+              if old["implementation_digest"] == new["implementation_digest"]:
+                  raise ValueError("collector implementation did not change")
+              expected = {"code": "DYNAMIC_ATTRIBUTE_HOOK", "path": "src/textual/_node_list.py", "line": 231}
+              if old["gaps"].count(expected) != 1:
+                  raise ValueError(f"{label}: expected readonly diagnostic not present")
+              if [g for g in old["gaps"] if g != expected] != new["gaps"]:
+                  raise ValueError(f"{label}: unexpected diagnostic change")
+              if old["complete"] or new["complete"] or not new["gaps"]:
+                  raise ValueError("remaining unknown behavior must stay incomplete")
+              reports.append({"label": label, "commit": new["commit"], "files": new["files"], "cases": new["cases"], "previous_gaps": len(old["gaps"]), "revised_gaps": len(new["gaps"]), "removed": expected})
+          for version in ("previous", "revised"):
+              selection = read(version, "selection.json")
+              if selection["execution"] != "full" or read(version, "targets.json") is not None:
+                  raise ValueError("unknown evidence must not authorize a subset")
+          result = {"schema": "smartci.textual-discovery-audit.v1", "comparisons": reports, "execution": "full", "test_execution_performed": False, "ci_savings_demonstrated": False}
+          (root / "comparison.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(result, indent=2))
+          PY
+      - name: Preserve discovery evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: textual-${{ matrix.mode }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/results
+          name: textual-discovery-audit-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/audit
           retention-days: 7
           if-no-files-found: error
