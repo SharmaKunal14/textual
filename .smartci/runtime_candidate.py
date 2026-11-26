@@ -81,7 +81,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=["native", "observe-scoped", "candidate", "plan"],
+        choices=["native", "observe-scoped", "candidate", "agent", "profile", "plan"],
         required=True,
     )
     parser.add_argument("--base", type=revision, required=True)
@@ -89,7 +89,10 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--enrollment", type=Path)
     parser.add_argument("--planner-python")
+    parser.add_argument("--trace-source-reads", action="store_true")
     args = parser.parse_args()
+    if args.trace_source_reads and args.mode != "observe-scoped":
+        parser.error("source-read tracing requires full scoped observation")
     root, output = Path.cwd().resolve(), args.output.resolve()
     if output.is_relative_to(root):
         parser.error("output must be outside source checkout")
@@ -107,7 +110,15 @@ def main():
     if current != args.head:
         raise ValueError("checkout differs from PR head")
     subprocess.run(["git", "diff", "--quiet", "HEAD"], check=True, timeout=10)
-    write(output / "profile.json", profile())
+    current_profile = profile()
+    if (
+        args.mode == "agent"
+        and json.loads(read(output / "profile.json")) != current_profile
+    ):
+        raise ValueError("environment changed after agent investigation")
+    write(output / "profile.json", current_profile)
+    if args.mode == "profile":
+        return 0
     started = time.monotonic()
     planning_seconds, planning_error, targets = 0.0, None, None
     if args.mode == "candidate":
@@ -144,6 +155,35 @@ def main():
                 flush=True,
             )
         planning_seconds = time.monotonic() - plan_started
+    elif args.mode == "agent":
+        try:
+            report = json.loads(read(output / "candidate.json"))
+            unsigned = {k: v for k, v in report.items() if k != "digest"}
+            if (
+                report["digest"]
+                != hashlib.sha256(
+                    json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                or report["comparison"] != {"base": args.base, "head": args.head}
+                or report["agent_status"] != "finished"
+                or report["omission_authorized"] is not False
+                or report["required_execution"] != "full"
+            ):
+                raise ValueError("invalid completed experimental agent evidence")
+            targets = selected_targets(output / "targets.json")
+            if targets != (
+                None
+                if report["candidate_files"] == report["inventory_files"]
+                else report["candidate_files"]
+            ):
+                raise ValueError("agent targets differ from evidence")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            planning_error, targets = type(exc).__name__, None
+            print(
+                f"Agent evidence unavailable ({planning_error}); executing full suite.",
+                flush=True,
+            )
+        planning_seconds = time.monotonic() - started
     print(
         f"Executing {len(targets) if targets else 'all'} native test files; independent full control required.",
         flush=True,
@@ -161,6 +201,15 @@ def main():
                 "--smartci-observation-contexts",
             ]
         )
+        if args.trace_source_reads:
+            command.extend(
+                [
+                    "-p",
+                    "smartci.adapters.runtime_reads",
+                    "--smartci-read-provenance",
+                    str(output / "read-provenance.json"),
+                ]
+            )
     test_started = time.monotonic()
     try:
         code = subprocess.run(command, check=False, timeout=900).returncode
@@ -181,6 +230,7 @@ def main():
             "exit_code": code,
             "required_execution": "full",
             "omission_authorized": False,
+            "source_read_provenance": args.trace_source_reads,
             "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         },
     )
