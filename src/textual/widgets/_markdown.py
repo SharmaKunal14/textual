@@ -698,8 +698,7 @@ class MarkdownTableContent(Widget):
             for cell in row:
                 new_cells.append(
                     Static(
-                        cell,
-                        classes=f"row{row_index} cell",
+                        cell, classes=f"row{row_index} cell", expand=True
                     ).with_tooltip(cell)
                 )
         self.last_row = row_index
@@ -935,15 +934,13 @@ class MarkdownFence(MarkdownBlock):
 
     def _copy_context(self, block: MarkdownBlock) -> None:
         if isinstance(block, MarkdownFence):
-            self.code = block.code
             self.lexer = block.lexer
-            self._highlighted_code = block._highlighted_code
-        super()._copy_context(block)
+            self._token = block._token
 
     async def _update_from_block(self, block: MarkdownBlock):
         if isinstance(block, MarkdownFence):
-            self._copy_context(block)
             self.set_content(block._highlighted_code)
+            self._copy_context(block)
         else:
             await super()._update_from_block(block)
 
