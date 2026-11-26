@@ -1,0 +1,2 @@
+Observe source-read origins on the unchanged native Textual profile.
+This experiment does not authorize test omissions or model calls.
