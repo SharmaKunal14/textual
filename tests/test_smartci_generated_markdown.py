@@ -1,6 +1,7 @@
 import pytest
 
 from textual.app import App, ComposeResult
+from textual.content import Content
 from textual.widgets import Markdown
 from textual.widgets._markdown import MarkdownTableContent
 
@@ -11,20 +12,25 @@ class TableApp(App[None]):
 
 
 @pytest.mark.asyncio
-async def test_append_completes_table_row_and_adds_another():
+async def test_update_rows_replaces_only_the_last_row_and_extends_table():
     app = TableApp()
     async with app.run_test():
         markdown = app.query_one(Markdown)
-        await markdown.update('| Item | State |\n| --- | --- |\n| A | ready |\n| B | pen')
+        await markdown.update('| Item | State |\n| --- | --- |\n| A | ready |\n| B | pen |')
         table = markdown.query_one(MarkdownTableContent)
         last = table.last_row
-        earlier = list(table.query_children(f'.cell.row{last - 1}'))
-        assert len(earlier) == 2
 
-        await markdown.append('ding |\n| C | done |')
+        def row_values(index: int) -> list[str]:
+            return [cell.tooltip.plain for cell in table.query_children(f'.cell.row{index}')]
 
-        assert list(table.query_children(f'.cell.row{last - 1}')) == earlier
+        assert row_values(last) == ['B', 'pen']
+        await table._update_rows([
+            [Content('B'), Content('pending')],
+            [Content('C'), Content('done')],
+        ])
+
+        assert table.styles.grid_size_columns == 2
         assert table.last_row == last + 1
-        for index, expected in [(last, ['B', 'pending']), (last + 1, ['C', 'done'])]:
-            cells = table.query_children(f'.cell.row{index}')
-            assert [cell.tooltip.plain for cell in cells] == expected
+        assert row_values(last - 1) == ['A', 'ready']
+        assert row_values(last) == ['B', 'pending']
+        assert row_values(last + 1) == ['C', 'done']
