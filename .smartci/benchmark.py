@@ -26,12 +26,17 @@ def checkout(root: Path, sha: str) -> None:
 
 
 def create_plan(
-    root: Path, base: str, head: str, output: Path, target_python: str
+    root: Path,
+    base: str,
+    head: str,
+    output: Path,
+    target_python: str,
+    diagnose_reachability: bool = False,
 ) -> None:
     from smartci.discovery.collector import collect
     from smartci.discovery.models import PythonConfig
     from smartci.discovery.planning import plan
-    from smartci.selection import SelectionPolicy
+    from smartci.selection import SelectionPolicy, digest
 
     config = PythonConfig(
         schema_version="1",
@@ -62,6 +67,16 @@ def create_plan(
                     "complete": snapshot.graph.complete,
                     "files": len(snapshot.inventory.tests),
                     "cases": snapshot.provenance.native_case_count,
+                    "native_cases_digest": snapshot.provenance.native_cases_digest,
+                    "source_digest": digest(snapshot.provenance.sources),
+                    "environment_identity": snapshot.provenance.environment.identity(),
+                    "implementation_digest": snapshot.provenance.implementation_digest,
+                    "edges_digest": digest(
+                        [edge.model_dump() for edge in snapshot.provenance.edges]
+                    ),
+                    "imports_digest": digest(
+                        [item.model_dump() for item in snapshot.provenance.imports]
+                    ),
                     "plugins": snapshot.provenance.plugins,
                     "gaps": [gap.model_dump() for gap in snapshot.provenance.gaps],
                     "snapshot_digest": snapshot.digest,
@@ -72,6 +87,16 @@ def create_plan(
         if result != repeated:
             raise ValueError("planning was not deterministic")
         write(output / "selection.json", result.model_dump())
+        if diagnose_reachability:
+            from known_reachability import summarize
+
+            from smartci.git_changes import changes_from_git
+
+            changes = changes_from_git(root, base, head, config.repository)
+            reachability = summarize(changes, snapshots[0], snapshots[1])
+            if reachability != summarize(changes, snapshots[0], snapshots[1]):
+                raise ValueError("reachability diagnostic was not deterministic")
+            write(output / "known-reachability.json", reachability)
         # A full decision always executes the independent native command.
         targets = (
             sorted(snapshots[1].provenance.native_targets[t] for t in result.selected)
@@ -102,24 +127,50 @@ def selected_targets(path: Path) -> list[str] | None:
     return sorted(set(value))
 
 
+def native_command(python: str, output: Path, targets: list[str] | None) -> list[str]:
+    return [
+        python,
+        "-m",
+        "pytest",
+        *(targets or ["tests"]),
+        "-v",
+        "--cov=./src/textual",
+        f"--cov-report=xml:{output / 'coverage.xml'}",
+        "--cov-report=term-missing",
+        f"--junitxml={output / 'junit.xml'}",
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--mode", choices=["native", "smart", "plan", "observe"], required=True
+        "--mode",
+        choices=["native", "smart", "plan", "observe", "observe-scoped"],
+        required=True,
     )
     parser.add_argument("--base", type=revision, required=True)
     parser.add_argument("--head", type=revision, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--planner-python", default=sys.executable)
     parser.add_argument("--target-python", default=sys.executable)
+    parser.add_argument("--diagnose-reachability", action="store_true")
     args = parser.parse_args()
+    if args.diagnose_reachability and args.mode != "plan":
+        parser.error("reachability diagnostics require plan-only mode")
     root = Path.cwd().resolve()
     output = args.output.resolve()
     if output.is_relative_to(root):
         parser.error("output must be outside the repository")
     output.mkdir(parents=True, exist_ok=True)
     if args.mode == "plan":
-        create_plan(root, args.base, args.head, output, args.target_python)
+        create_plan(
+            root,
+            args.base,
+            args.head,
+            output,
+            args.target_python,
+            args.diagnose_reachability,
+        )
         return 0
 
     started = time.monotonic()
@@ -160,18 +211,9 @@ def main() -> int:
         planning_seconds = time.monotonic() - plan_started
     print(f"Executing {'subset' if targets else 'full native suite'}...", flush=True)
     test_started = time.monotonic()
-    command = [
-        sys.executable,
-        "-m",
-        "pytest",
-        *(targets or ["tests"]),
-        "-v",
-        "--cov=./src/textual",
-        f"--cov-report=xml:{output / 'coverage.xml'}",
-        "--cov-report=term-missing",
-        f"--junitxml={output / 'junit.xml'}",
-    ]
-    if args.mode == "observe":
+    command = native_command(sys.executable, output, targets)
+    observing = args.mode in {"observe", "observe-scoped"}
+    if observing:
         command.extend(
             [
                 "-p",
@@ -180,9 +222,17 @@ def main() -> int:
                 str(output / "observation.json"),
             ]
         )
+        if args.mode == "observe-scoped":
+            command.extend(
+                [
+                    "--smartci-observation-engine",
+                    "monitoring",
+                    "--smartci-observation-contexts",
+                ]
+            )
     try:
         code = subprocess.run(
-            command, check=False, timeout=900 if args.mode == "observe" else 720
+            command, check=False, timeout=900 if observing else 720
         ).returncode
     except subprocess.TimeoutExpired:
         code = 124

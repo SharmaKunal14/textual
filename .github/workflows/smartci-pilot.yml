@@ -1,15 +1,17 @@
-name: Textual runtime observation experiment
+name: Textual runtime candidate experiment
 on:
   pull_request:
-    branches: [codex/runtime-base]
+    branches: [codex/runtime-candidate-base, codex/runtime-candidate-enrolled]
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
+  actions: read
 concurrency:
-  group: textual-observation-${{ github.event.pull_request.number }}
+  group: textual-runtime-candidate-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   benchmark:
+    if: github.repository == 'SharmaKunal14/textual' && github.event.pull_request.head.repo.full_name == github.repository
     name: ${{ matrix.mode }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -17,7 +19,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        mode: [native, observe]
+        mode: ${{ fromJSON(github.base_ref == 'codex/runtime-candidate-base' && '["native","observe-scoped"]' || '["native","candidate"]') }}
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -33,31 +35,53 @@ jobs:
           python-version: '3.14'
       - name: Install native Poetry toolchain
         run: pipx install poetry==1.7.1
-      - name: Install native locked dependencies and syntax extras
+      - name: Install unchanged native locked dependencies and syntax extras
         working-directory: app
         run: |
           poetry env use "$pythonLocation/bin/python"
           poetry install --no-interaction --extras syntax
-          poetry run python -c 'import sys; assert sys.version_info[:2] == (3, 14); print(sys.version)'
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        if: matrix.mode == 'observe'
+        if: matrix.mode != 'native'
         with:
           repository: SharmaKunal14/smart-ci
-          ref: e878d8b1d9c3e50a19a51476c6115e6239e91c15
+          ref: d31779325c6097de712e384066a337d5e97b96b1
           path: tool
           persist-credentials: false
       - name: Install observer without changing native dependencies
-        if: matrix.mode == 'observe'
+        if: matrix.mode == 'observe-scoped'
         working-directory: app
         run: poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
-      - name: Run full native or instrumented profile
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        if: matrix.mode == 'candidate'
+        with:
+          version: '0.11.6'
+          enable-cache: false
+      - name: Install isolated candidate planner
+        if: matrix.mode == 'candidate'
+        run: uv sync --project tool --frozen --no-dev --python 3.14
+      - name: Download enrollment evidence; unavailable evidence falls back to full
+        if: matrix.mode == 'candidate'
+        timeout-minutes: 2
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENROLLMENT_RUN: ${{ vars.SMARTCI_TEXTUAL_CANDIDATE_ENROLLMENT_RUN }}
+        run: |
+          [[ "$ENROLLMENT_RUN" =~ ^[1-9][0-9]{0,19}$ ]]
+          mkdir -p "$RUNNER_TEMP/enrollment"
+          gh api "repos/SharmaKunal14/textual/actions/runs/$ENROLLMENT_RUN" > "$RUNNER_TEMP/enrollment/run.json"
+          gh api "repos/SharmaKunal14/textual/actions/runs/$ENROLLMENT_RUN/attempts/1/jobs?per_page=100" > "$RUNNER_TEMP/enrollment/jobs.json"
+          gh run download "$ENROLLMENT_RUN" --repo SharmaKunal14/textual \
+            --pattern 'textual-native-1' --pattern 'textual-observe-scoped-1' --dir "$RUNNER_TEMP/enrollment"
+      - name: Run native profile or shadow hypothesis with mandatory full control
         working-directory: app
         env:
           BENCHMARK_MODE: ${{ matrix.mode }}
         run: |
-          poetry run python .smartci/benchmark.py --mode "$BENCHMARK_MODE" \
-            --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/results"
-      - name: Preserve independent test results and audit
+          poetry run python .smartci/runtime_candidate.py --mode "$BENCHMARK_MODE" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/results" \
+            --enrollment "$RUNNER_TEMP/enrollment" --planner-python "$GITHUB_WORKSPACE/tool/.venv/bin/python"
+      - name: Preserve native outcomes, candidate and provenance
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
