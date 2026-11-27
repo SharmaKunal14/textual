@@ -692,7 +692,7 @@ class MarkdownTableContent(Widget):
 
     async def _update_rows(self, updated_rows: list[list[Content]]) -> None:
         self.styles.grid_size_columns = len(self.headers)
-        await self.query_children(f".cell.row{self.last_row}").remove()
+        await self.query_children(f".cell.row{self.last_row + 1}").remove()
         new_cells: list[Static] = []
         for row_index, row in enumerate(updated_rows, self.last_row):
             for cell in row:
