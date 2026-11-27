@@ -43,7 +43,7 @@ jobs:
         if: matrix.mode == 'smart'
         with:
           repository: SharmaKunal14/smart-ci
-          ref: 72c5c8125b3dbd6655cac40b88f12654f8e7afca
+          ref: 6d72bb8a049aaa7fde8e51fc12951a31ae020d0b
           path: tool
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
