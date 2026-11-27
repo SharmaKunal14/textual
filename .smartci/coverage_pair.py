@@ -19,6 +19,12 @@ from compare_observation import junit, read
 from runtime_candidate import profile
 
 
+def canonical_digest(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def reconcile_inventory(nodeids, cases, targets):
     # Use the actual installed native pytest's JUnit naming, including parameters.
     from _pytest.junitxml import mangle_test_address
@@ -43,6 +49,13 @@ def receipt(output, execution, environment, run_id):
     raw = read(output / "coverage.xml", 16 * 1024 * 1024)
     cases = junit(read(output / "junit.xml"))
     expected = json.loads(read(output / "head-cases.json"))
+    collected = json.loads(read(output / "head-compatibility.json"))
+    if (
+        collected["commit"] != execution["head"]
+        or collected["native_cases_digest"] != canonical_digest(expected)
+        or collected["native_case_count"] != len(expected)
+    ):
+        raise ValueError("native inventory revision or digest mismatch")
     failed = any(value[0] in {"failure", "error"} for value in cases.values())
     reconciled = (
         execution["exit_code"] in {0, 1}
@@ -53,9 +66,7 @@ def receipt(output, execution, environment, run_id):
         "schema_version": "smartci.coverage-receipt.v1",
         "repository": "SharmaKunal14/textual",
         "revision": execution["head"],
-        "environment": hashlib.sha256(
-            json.dumps(environment, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest(),
+        "environment": canonical_digest(environment),
         "coverage_sha256": hashlib.sha256(raw).hexdigest(),
         "source_prefix": "src/textual",
         "run_url": f"https://github.com/SharmaKunal14/textual/actions/runs/{run_id}",
