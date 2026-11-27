@@ -53,7 +53,7 @@ def receipt(output, execution, environment, run_id):
     if (
         collected["commit"] != execution["head"]
         or collected["native_cases_digest"] != canonical_digest(expected)
-        or collected["native_case_count"] != len(expected)
+        or collected["cases"] != len(expected)
     ):
         raise ValueError("native inventory revision or digest mismatch")
     failed = any(value[0] in {"failure", "error"} for value in cases.values())
