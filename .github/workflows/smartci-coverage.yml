@@ -1,0 +1,80 @@
+name: Textual deterministic selection and coverage report
+on:
+  pull_request:
+    branches: [codex/coverage-report-base]
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+concurrency:
+  group: textual-coverage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  benchmark:
+    if: github.repository == 'SharmaKunal14/textual' && github.event.pull_request.head.repo.full_name == github.repository
+    name: ${{ matrix.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        mode: [native, smart]
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      SMARTCI_DISABLE_MODEL_CALLS: '1'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: app
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - name: Install unchanged native locked profile
+        working-directory: app
+        run: |
+          pipx install poetry==1.7.1
+          poetry env use "$pythonLocation/bin/python"
+          poetry install --no-interaction --extras syntax
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        if: matrix.mode == 'smart'
+        with:
+          repository: SharmaKunal14/smart-ci
+          ref: 128bb6ff96f7ff4ef5d1a1b5929e51f4efca68a2
+          path: tool
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        if: matrix.mode == 'smart'
+        with:
+          version: '0.11.6'
+          enable-cache: false
+      - name: Install isolated selector and native collection plugin
+        if: matrix.mode == 'smart'
+        run: |
+          uv sync --project tool --frozen --no-dev --python 3.14
+          cd app
+          poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
+      - name: Execute native baseline or production selector and advisory report
+        working-directory: app
+        env:
+          BENCHMARK_MODE: ${{ matrix.mode }}
+        run: |
+          poetry run python .smartci/coverage_pair.py --mode "$BENCHMARK_MODE" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/results" \
+            --planner-python "$GITHUB_WORKSPACE/tool/.venv/bin/python"
+      - name: Show coverage gaps without changing native test outcome
+        if: always() && matrix.mode == 'smart'
+        run: |
+          if test -f "$RUNNER_TEMP/results/coverage-gaps.md"; then
+            cat "$RUNNER_TEMP/results/coverage-gaps.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: textual-${{ matrix.mode }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/results
+          retention-days: 14
+          if-no-files-found: error

@@ -58,8 +58,10 @@ def create_plan(
         for label, commit in (("base", base), ("head", head)):
             print(f"Collecting {label} dependency map at {commit}...", flush=True)
             checkout(root, commit)
-            snapshot, _, _ = collect(root, config, target_python)
+            snapshot, runner, _ = collect(root, config, target_python)
             snapshots.append(snapshot)
+            if label == "head":
+                write(output / "head-cases.json", list(runner.pytest_cases))
             write(
                 output / f"{label}-compatibility.json",
                 {
@@ -141,7 +143,7 @@ def native_command(python: str, output: Path, targets: list[str] | None) -> list
     ]
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
@@ -154,7 +156,7 @@ def main() -> int:
     parser.add_argument("--planner-python", default=sys.executable)
     parser.add_argument("--target-python", default=sys.executable)
     parser.add_argument("--diagnose-reachability", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.diagnose_reachability and args.mode != "plan":
         parser.error("reachability diagnostics require plan-only mode")
     root = Path.cwd().resolve()
