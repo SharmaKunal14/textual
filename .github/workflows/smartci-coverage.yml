@@ -1,4 +1,4 @@
-name: Textual deterministic selection and coverage report
+name: Textual deterministic selection efficiency
 on:
   pull_request:
     branches: [codex/coverage-report-base]
@@ -43,7 +43,7 @@ jobs:
         if: matrix.mode == 'smart'
         with:
           repository: SharmaKunal14/smart-ci
-          ref: 12324ce9502b75a514bb598993ef0941a029ef8c
+          ref: 72c5c8125b3dbd6655cac40b88f12654f8e7afca
           path: tool
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
@@ -57,20 +57,14 @@ jobs:
           uv sync --project tool --frozen --no-dev --python 3.14
           cd app
           poetry run python -m pip install --disable-pip-version-check --no-deps ../tool
-      - name: Execute native baseline or production selector and advisory report
+      - name: Execute native baseline or production selector
         working-directory: app
         env:
           BENCHMARK_MODE: ${{ matrix.mode }}
         run: |
           poetry run python .smartci/coverage_pair.py --mode "$BENCHMARK_MODE" \
             --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/results" \
-            --planner-python "$GITHUB_WORKSPACE/tool/.venv/bin/python"
-      - name: Show coverage gaps without changing native test outcome
-        if: always() && matrix.mode == 'smart'
-        run: |
-          if test -f "$RUNNER_TEMP/results/coverage-gaps.md"; then
-            cat "$RUNNER_TEMP/results/coverage-gaps.md" >> "$GITHUB_STEP_SUMMARY"
-          fi
+            --planner-python "$GITHUB_WORKSPACE/tool/.venv/bin/python" --skip-coverage-report
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

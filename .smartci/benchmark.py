@@ -35,7 +35,7 @@ def create_plan(
 ) -> None:
     from smartci.discovery.collector import collect
     from smartci.discovery.models import PythonConfig
-    from smartci.discovery.planning import plan
+    from smartci.discovery.planning import plan, required_full_from_head
     from smartci.selection import SelectionPolicy, digest
 
     config = PythonConfig(
@@ -53,13 +53,19 @@ def create_plan(
         unknown_evidence="full",
         allow_source_excerpts=False,
     )
-    snapshots = []
+    snapshots = {}
+    result = None
     try:
-        for label, commit in (("base", base), ("head", head)):
+        for label, commit in (("head", head), ("base", base)):
             print(f"Collecting {label} dependency map at {commit}...", flush=True)
             checkout(root, commit)
-            snapshot, runner, _ = collect(root, config, target_python)
-            snapshots.append(snapshot)
+            timings = {}
+            snapshot, runner, _ = collect(root, config, target_python, timings=timings)
+            print(
+                json.dumps({"revision": label, "collection_seconds": timings}),
+                flush=True,
+            )
+            snapshots[label] = snapshot
             if label == "head":
                 write(output / "head-cases.json", list(runner.pytest_cases))
             write(
@@ -82,12 +88,25 @@ def create_plan(
                     "plugins": snapshot.provenance.plugins,
                     "gaps": [gap.model_dump() for gap in snapshot.provenance.gaps],
                     "snapshot_digest": snapshot.digest,
+                    "timings_seconds": timings,
                 },
             )
-        result = plan(root, snapshots[0], snapshots[1], policy)
-        repeated = plan(root, snapshots[0], snapshots[1], policy)
-        if result != repeated:
-            raise ValueError("planning was not deterministic")
+            if label == "head" and not diagnose_reachability:
+                result = required_full_from_head(root, base, snapshot, policy)
+                if result is not None:
+                    if result != required_full_from_head(root, base, snapshot, policy):
+                        raise ValueError("full decision was not deterministic")
+                    print(
+                        "Head requires full execution; skipping redundant base discovery.",
+                        flush=True,
+                    )
+                    break
+        checkout(root, head)
+        if result is None:
+            result = plan(root, snapshots["base"], snapshots["head"], policy)
+            repeated = plan(root, snapshots["base"], snapshots["head"], policy)
+            if result != repeated:
+                raise ValueError("planning was not deterministic")
         write(output / "selection.json", result.model_dump())
         if diagnose_reachability:
             from known_reachability import summarize
@@ -95,13 +114,15 @@ def create_plan(
             from smartci.git_changes import changes_from_git
 
             changes = changes_from_git(root, base, head, config.repository)
-            reachability = summarize(changes, snapshots[0], snapshots[1])
-            if reachability != summarize(changes, snapshots[0], snapshots[1]):
+            reachability = summarize(changes, snapshots["base"], snapshots["head"])
+            if reachability != summarize(changes, snapshots["base"], snapshots["head"]):
                 raise ValueError("reachability diagnostic was not deterministic")
             write(output / "known-reachability.json", reachability)
         # A full decision always executes the independent native command.
         targets = (
-            sorted(snapshots[1].provenance.native_targets[t] for t in result.selected)
+            sorted(
+                snapshots["head"].provenance.native_targets[t] for t in result.selected
+            )
             if result.execution == "subset"
             else None
         )

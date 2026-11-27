@@ -84,6 +84,7 @@ def main():
     parser.add_argument("--head", type=benchmark.revision, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--planner-python", required=True)
+    parser.add_argument("--skip-coverage-report", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     if output.is_relative_to(Path.cwd().resolve()):
@@ -127,7 +128,7 @@ def main():
     execution = json.loads(read(output / "execution.json"))
     report_started = time.monotonic()
     report_code = None
-    if args.mode == "smart":
+    if args.mode == "smart" and not args.skip_coverage_report:
         print(
             "Reporting changed-code coverage; selection is already fixed...", flush=True
         )
@@ -185,9 +186,10 @@ def main():
             report_code = 2
     execution.update(
         reporting_seconds=time.monotonic() - report_started
-        if args.mode == "smart"
+        if args.mode == "smart" and not args.skip_coverage_report
         else 0.0,
         reporting_exit=report_code,
+        reporting_deferred=args.skip_coverage_report,
         measured_command_seconds=time.monotonic() - started,
         model_calls=0,
         harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
